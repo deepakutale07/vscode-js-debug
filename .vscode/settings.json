@@ -29,5 +29,8 @@
   "typescript.tsserver.experimental.enableProjectDiagnostics": true,
   "[typescript]": {
     "editor.defaultFormatter": "dprint.dprint"
+  },
+  "[jsonc]": {
+    "editor.defaultFormatter": "vscode.json-language-features"
   }
 }
