@@ -1,0 +1,300 @@
+import random
+import math
+import sys
+import secrets
+from functools import reduce
+from math import gcd as _gcd
+
+WELCOME = """
+Numeric Oracle — Hard mode
+You must discover a secret integer using a limited query budget.
+Commands (examples):
+  mod 97         -> returns secret % 97
+  digitsum 16    -> returns sum of digits of secret in base 16
+  gcd 360        -> returns gcd(secret, 360)
+  bit 5          -> returns bit number 5 (0-based)
+  lead 4         -> returns first 4 decimal digits
+  bits           -> returns bit-length estimate
+  prime?         -> tells whether secret is prime (costly)
+  guess 123456   -> submit final guess
+  budget         -> show remaining budget/queries
+  help / quit
+Each command consumes budget depending on its information content.
+Good luck.
+"""
+
+DIFFICULTIES = {
+    "1": ("Very Hard", 18, 120),   # 18-digit, 120 budget
+    "2": ("Extremely Hard", 24, 140),
+    "3": ("Insane", 30, 180),
+}
+
+def choose_difficulty():
+    print("Choose difficulty:")
+    for k, (name, digits, budget) in DIFFICULTIES.items():
+        print(f"  {k}) {name:12} secret_digits={digits}   budget={budget}")
+    while True:
+        c = input("Select 1/2/3: ").strip()
+        if c in DIFFICULTIES:
+            return DIFFICULTIES[c]
+        print("Invalid selection.")
+
+def make_secret(num_digits):
+    # generate a random decimal integer with exactly num_digits
+    first = secrets.choice("123456789")
+    rest = "".join(secrets.choice("0123456789") for _ in range(num_digits-1))
+    return int(first + rest)
+
+def cost_for_mod(m):
+    if m <= 1:
+        return 5
+    return max(1, int(math.log2(m)) // 2 + 1)
+
+def cost_for_digitsum(base):
+    return min(25, max(1, base // 2))
+
+def cost_for_gcd(n):
+    if n <= 1:
+        return 5
+    # approximate cost by number of distinct small prime factors we'll check
+    ct = 0
+    tmp = n
+    p = 2
+    while p*p <= tmp and ct < 10:
+        if tmp % p == 0:
+            ct += 1
+            while tmp % p == 0:
+                tmp //= p
+        p += 1 if p==2 else 2
+    if tmp > 1:
+        ct += 1
+    return min(30, 2 + ct*3)
+
+def cost_for_bits():
+    return 8
+
+def cost_for_bit_pos():
+    return 1
+
+def cost_for_lead(k):
+    return min(25, k+1)
+
+def cost_for_prime():
+    return 30
+
+def parse_positive_int(tok):
+    try:
+        v = int(tok)
+        if v < 0:
+            raise ValueError
+        return v
+    except Exception:
+        return None
+
+def show_state(budget, queries_left):
+    print(f"Budget remaining: {budget}   Queries used: {queries_left}")
+
+def is_probable_prime(n, k=10):
+    if n < 2:
+        return False
+    small_primes = [2,3,5,7,11,13,17,19,23,29]
+    for p in small_primes:
+        if n % p == 0:
+            return n == p
+    # Miller-Rabin
+    d = n - 1
+    s = 0
+    while d % 2 == 0:
+        s += 1
+        d //= 2
+    for _ in range(k):
+        a = random.randrange(2, n - 1)
+        x = pow(a, d, n)
+        if x == 1 or x == n - 1:
+            continue
+        for _ in range(s-1):
+            x = (x * x) % n
+            if x == n - 1:
+                break
+        else:
+            return False
+    return True
+
+def run_game():
+    print(WELCOME)
+    name, digits, budget = choose_difficulty()
+    secret = make_secret(digits)
+    # secret is intentionally opaque; do not print
+    queries = 0
+    used = 0
+    max_queries = 1000
+    # keep a small info cache for player convenience (not revealing secret)
+    cache = {}
+    while True:
+        try:
+            cmd = input("\n> ").strip()
+        except EOFError:
+            print("\nExiting.")
+            return
+        if not cmd:
+            continue
+        parts = cmd.split()
+        verb = parts[0].lower()
+        if verb in ("help", "?"):
+            print(WELCOME)
+            continue
+        if verb in ("quit","exit"):
+            print("Goodbye.")
+            return
+        if verb == "budget":
+            show_state(budget, used)
+            continue
+        if verb == "mod" and len(parts) == 2:
+            m = parse_positive_int(parts[1])
+            if m is None or m == 0:
+                print("Provide a positive modulus > 0.")
+                continue
+            c = cost_for_mod(m)
+            if budget < c:
+                print(f"Not enough budget for mod {m} (cost {c}).")
+                continue
+            budget -= c; used += 1
+            r = secret % m
+            cache[f"mod {m}"] = r
+            print(f"secret % {m} = {r}   (cost {c})")
+            continue
+        if verb == "digitsum" and len(parts) == 2:
+            b = parse_positive_int(parts[1])
+            if b is None or b < 2 or b > 36:
+                print("Base must be between 2 and 36.")
+                continue
+            c = cost_for_digitsum(b)
+            if budget < c:
+                print(f"Not enough budget for digitsum base {b} (cost {c}).")
+                continue
+            budget -= c; used += 1
+            s = 0
+            x = secret
+            while x:
+                s += x % b
+                x //= b
+            cache[f"digitsum {b}"] = s
+            print(f"digitsum(base={b}) = {s}   (cost {c})")
+            continue
+        if verb == "gcd" and len(parts) == 2:
+            n = parse_positive_int(parts[1])
+            if n is None or n == 0:
+                print("Provide positive integer.")
+                continue
+            c = cost_for_gcd(n)
+            if budget < c:
+                print(f"Not enough budget for gcd {n} (cost {c}).")
+                continue
+            budget -= c; used += 1
+            g = _gcd(secret, n)
+            cache[f"gcd {n}"] = g
+            print(f"gcd(secret, {n}) = {g}   (cost {c})")
+            continue
+        if verb == "bit" and len(parts) == 2:
+            k = parse_positive_int(parts[1])
+            if k is None:
+                print("Provide non-negative bit index.")
+                continue
+            c = cost_for_bit_pos()
+            if budget < c:
+                print(f"Not enough budget for bit query (cost {c}).")
+                continue
+            budget -= c; used += 1
+            b = (secret >> k) & 1
+            cache[f"bit {k}"] = b
+            print(f"bit {k} = {b}   (cost {c})")
+            continue
+        if verb == "lead" and len(parts) == 2:
+            k = parse_positive_int(parts[1])
+            if k is None or k == 0:
+                print("Provide positive digit count.")
+                continue
+            c = cost_for_lead(k)
+            if budget < c:
+                print(f"Not enough budget for lead {k} (cost {c}).")
+                continue
+            budget -= c; used += 1
+            s = str(secret)[:k]
+            cache[f"lead {k}"] = s
+            print(f"leading {k} digits = {s}   (cost {c})")
+            continue
+        if verb == "bits":
+            c = cost_for_bits()
+            if budget < c:
+                print(f"Not enough budget for bits (cost {c}).")
+                continue
+            budget -= c; used += 1
+            bl = secret.bit_length()
+            cache["bits"] = bl
+            print(f"bit-length estimate = {bl}   (cost {c})")
+            continue
+        if verb in ("prime","prime?"):
+            c = cost_for_prime()
+            if budget < c:
+                print(f"Not enough budget for primality check (cost {c}).")
+                continue
+            budget -= c; used += 1
+            p = is_probable_prime(secret, k=12)
+            cache["prime"] = p
+            print(f"is prime? {p}   (cost {c})")
+            continue
+        if verb == "cache":
+            for k,v in cache.items():
+                print(f"  {k} -> {v}")
+            continue
+        if verb == "guess" and len(parts) == 2:
+            g = parse_positive_int(parts[1])
+            if g is None:
+                print("Provide a non-negative integer guess.")
+                continue
+            queries += 1
+            if g == secret:
+                print(f"Correct! You guessed the secret in {used} budget and {queries} guesses.")
+                return
+            else:
+                # subtle feedback: proximity score (not direct difference) to keep it hard
+                diff = abs(g - secret)
+                # proximity = number of matching leading digits
+                s_g = str(g)
+                s_s = str(secret)
+                lead_match = sum(1 for a,b in zip(s_g,s_s) if a==b)
+                hint = "no"
+                if lead_match >= 1:
+                    hint = f"{lead_match} leading digit(s) match"
+                else:
+                    # if guess shares many small prime factors, mention that
+                    common = _gcd(g, secret)
+                    if common > 1:
+                        hint = f"shares factor {common}"
+                    else:
+                        # give a coarse magnitude hint
+                        mag = len(str(diff))
+                        hint = f"difference has {mag} digits"
+                print(f"Wrong. Hint: {hint}.")
+                # small penalty for wrong final guesses
+                budget -= 3
+                if budget <= 0:
+                    print("Budget exhausted after penalty. You lose.")
+                    print(f"The secret was: {secret}")
+                    return
+                continue
+        print("Unknown command. Type 'help' for commands.")
+        if used >= max_queries:
+            print("Query limit reached. Game over.")
+            print(f"The secret was: {secret}")
+            return
+
+def main():
+    try:
+        run_game()
+    except KeyboardInterrupt:
+        print("\nInterrupted. Goodbye.")
+        sys.exit(0)
+
+if __name__ == "__main__":
+    main()
